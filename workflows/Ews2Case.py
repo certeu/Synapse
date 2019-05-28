@@ -3,6 +3,8 @@
 
 import os, sys
 import logging
+import re
+
 current_dir = os.path.dirname(os.path.abspath(__file__))
 app_dir = current_dir + '/..'
 sys.path.insert(0, current_dir)
@@ -22,6 +24,10 @@ def connectEws():
     try:
         cfg = getConf()
 
+        caseIdInSubjectRegex = cfg.get('EWS', 'case_id_in_subject_regex', fallback=None)
+        if caseIdInSubjectRegex is not None:
+            caseIdInSubjectRegex = re.compile(caseIdInSubjectRegex)
+
         ewsConnector = EwsConnector(cfg)
         folder_name = cfg.get('EWS', 'folder_name')
         unread = ewsConnector.scan(folder_name)
@@ -29,23 +35,37 @@ def connectEws():
         theHiveConnector = TheHiveConnector(cfg)
 
         for msg in unread:
-            #type(msg)
-            #<class 'exchangelib.folders.Message'>
-            conversationId = msg.conversation_id.id
-            
-            #searching if case has already been created from the email
-            #conversation
-            esCaseId = theHiveConnector.searchCaseByDescription(conversationId)
+
+            esCaseId = None
+
+            if caseIdInSubjectRegex is not None:
+                subject = str(msg.subject)
+                match = caseIdInSubjectRegex.search(subject)
+                if match is not None:
+                    esCaseId = theHiveConnector.searchCaseByCaseId(match.group(1))
+            else:
+                # type(msg)
+                # <class 'exchangelib.folders.Message'>
+                conversationId = msg.conversation_id.id
+
+                # searching if case has already been created from the email
+                # conversation
+                esCaseId = theHiveConnector.searchCaseByDescription(conversationId)
 
             if esCaseId is None:
                 #no case previously created from the conversation
                 caseTitle = str(msg.subject)
-                caseDescription = ('```\n' +
-                    'Case created by Synapse\n' +
-                    'conversation_id: "' +
-                    str(msg.conversation_id.id) +
-                    '"\n' +
-                    '```')
+
+                if caseIdInSubjectRegex is None:
+                    caseDescription = ('```\n' +
+                        'Case created by Synapse\n' +
+                        'conversation_id: "' +
+                        str(msg.conversation_id.id) +
+                        '"\n' +
+                        '```')
+                else:
+                    caseDescription = getEmailBody(msg)
+
                 if msg.categories:
                     assignee = msg.categories[0]
                 else:
@@ -54,11 +74,11 @@ def connectEws():
                 case = theHiveConnector.craftCase(caseTitle, caseDescription)
                 createdCase = theHiveConnector.createCase(case)
                 caseUpdated = theHiveConnector.assignCase(createdCase, assignee)
-
-                commTask = theHiveConnector.craftCommTask()
                 esCaseId = caseUpdated.id
-                commTaskId = theHiveConnector.createTask(esCaseId, commTask)
 
+                if caseIdInSubjectRegex is None:
+                    commTaskId = createCommTask(theHiveConnector, esCaseId)
+                    createTaskLog(theHiveConnector, msg, commTaskId)
             else:
                 #case previously created from the conversation
                 commTaskId = theHiveConnector.getTaskIdByTitle(
@@ -67,14 +87,11 @@ def connectEws():
                 if commTaskId != None:
                     pass
                 else:
-                    #case already exists but no Communication task found
-                    #creating comm task
-                    commTask = theHiveConnector.craftCommTask()
-                    commTaskId = theHiveConnector.createTask(esCaseId, commTask) 
+                    # case already exists but no Communication task found
+                    # creating comm task
+                    commTaskId = createCommTask(theHiveConnector, esCaseId)
 
-            fullBody = getEmailBody(msg)
-            taskLog = theHiveConnector.craftTaskLog(fullBody)
-            createdTaskLogId = theHiveConnector.addTaskLog(commTaskId, taskLog)
+                createTaskLog(theHiveConnector, msg, commTaskId)
 
             readMsg = ewsConnector.markAsRead(msg)
 
@@ -121,7 +138,18 @@ def connectEws():
             logger.error('Failed to create case from email', exc_info=True)
             report['success'] = False
             return report
-            
+
+
+def createCommTask(theHiveConnector, esCaseId):
+    commTask = theHiveConnector.craftCommTask()
+    return theHiveConnector.createTask(esCaseId, commTask)
+
+
+def createTaskLog(theHiveConnector, msg, commTaskId):
+    fullBody = getEmailBody(msg)
+    taskLog = theHiveConnector.craftTaskLog(fullBody)
+    return theHiveConnector.addTaskLog(commTaskId, taskLog)
+
 
 def getEmailBody(email):
     #crafting some "reply to" info

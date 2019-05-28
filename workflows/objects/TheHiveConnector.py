@@ -25,14 +25,14 @@ class TheHiveConnector:
 
         return TheHiveApi(url, api_key)
 
-    def searchCaseByDescription(self, string):
-        #search case with a specific string in description
-        #returns the ES case ID
+    def searchCaseByString(self, string_query):
+        # search case by a specific string query
+        # returns the ES case ID
 
         self.logger.info('%s.searchCaseByDescription starts', __name__)
 
         query = dict()
-        query['_string'] = 'description:"{}"'.format(string)
+        query['_string'] = string_query
         range = 'all'
         sort = []
         response = self.theHiveApi.find_cases(query=query, range=range, sort=sort)
@@ -42,7 +42,9 @@ class TheHiveConnector:
             error['message'] = 'search case failed'
             error['query'] = query
             error['payload'] = response.json()
+
             self.logger.error('Query to TheHive API did not return 200')
+
             raise ValueError(json.dumps(error, indent=4, sort_keys=True))
 
         if len(response.json()) == 1:
@@ -54,8 +56,21 @@ class TheHiveConnector:
             return None
         else:
             #unknown use case
-            raise ValueError('unknown use case after searching case by description')
+            raise ValueError('unknown use case after searching case by string query')
 
+    def searchCaseByDescription(self, string):
+        # search case with a specific string in description
+        # returns the ES case ID
+
+        string_query = 'description:"{}"'.format(string)
+        return self.searchCaseByString(string_query)
+
+    def searchCaseByCaseId(self, caseId):
+        # search case with a specific case ID
+        # returns the ES case ID
+
+        string_query = 'caseId:"{}"'.format(caseId)
+        return self.searchCaseByString(string_query)
 
     def craftCase(self, title, description):
         self.logger.info('%s.craftCase starts', __name__)
